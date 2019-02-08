@@ -46,9 +46,10 @@ fn atomic_random_atomic_change(bencher: &mut Bencher) {
         let index = thread_rng().gen_range(0, size as u64);
         let atomic1 = vec.get(index);
         let current1 = atomic1.load(Ordering::Relaxed);
-        atomic1.store(current1 + 1, Ordering::Relaxed);
+        let next = current1 + 1;
+        atomic1.store(next, Ordering::Relaxed);
         let atomic2 = vec.get(index);
         let current2 = atomic2.load(Ordering::Relaxed);
-        assert!(current2 == current1 + 1);
+        assert_eq!(current2, next);
     });
 }

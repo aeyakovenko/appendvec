@@ -43,12 +43,12 @@ where
         }
     }
 
-    pub fn get(&self, index: u64) -> T {
+    pub fn get(&self, index: u64) -> &T {
         assert!(self.current_offset > index);
         let index = (index as usize) * mem::size_of::<T>();
         let data = &self.map[index..(index + mem::size_of::<T>())];
-        let x: T = unsafe { std::ptr::read(data.as_ptr() as *const _) };
-        x
+        let ptr = data.as_ptr() as *const _;
+        unsafe { ptr.as_ref().unwrap() }
     }
 
     pub fn grow_file(&mut self) -> io::Result<()> {
@@ -91,11 +91,11 @@ pub mod tests {
         let mut av = AppendVec::new("/tmp/appendvec/test_append");
         let val: u64 = 5;
         let index = av.append(val).unwrap();
-        assert_eq!(av.get(index), val);
+        assert_eq!(*av.get(index), val);
         let val1 = val + 1;
         let index1 = av.append(val1).unwrap();
-        assert_eq!(av.get(index), val);
-        assert_eq!(av.get(index1), val1);
+        assert_eq!(*av.get(index), val);
+        assert_eq!(*av.get(index1), val1);
     }
 
     #[test]
