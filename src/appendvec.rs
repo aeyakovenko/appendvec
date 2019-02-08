@@ -19,13 +19,13 @@ impl<T> AppendVec<T>
 where
     T: Default,
 {
-    pub fn new() -> Self {
+    pub fn new(file: &str) -> Self {
         const DATA_FILE_START_SIZE: u64 = 16 * 1024 * 1024;
         let mut data = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open("/tmp/append_vec_data")
+            .open(file)
             .expect("Unable to open data file");
 
         data.seek(SeekFrom::Start(DATA_FILE_START_SIZE)).unwrap();
@@ -44,7 +44,6 @@ where
     }
 
     pub fn get(&self, index: u64) -> T {
-        //info!("cur: {} index {}", self.current_offset, index);
         assert!(self.current_offset > index);
         let index = (index as usize) * mem::size_of::<T>();
         let data = &self.map[index..(index + mem::size_of::<T>())];
@@ -89,7 +88,7 @@ pub mod tests {
 
     #[test]
     fn test_append_vec() {
-        let mut av = AppendVec::new();
+        let mut av = AppendVec::new("/tmp/appendvec/test_append");
         let val: u64 = 5;
         let index = av.append(val).unwrap();
         assert_eq!(av.get(index), val);
@@ -101,14 +100,17 @@ pub mod tests {
 
     #[test]
     fn test_grow_append_vec() {
-        let mut av = AppendVec::new();
+        let mut av = AppendVec::new("/tmp/appendvec/test_grow");
         //let mut val: u64 = 5;
         let mut val = [5u64; 32];
         let size = 100_000;
 
         let now = Instant::now();
         for _ in 0..size {
-            av.append(val);
+            if av.append(val).is_none() {
+                assert!(av.grow_file().is_ok());
+                assert!(av.append(val).is_some());
+            }
             val[0] += 1;
         }
         println!(
