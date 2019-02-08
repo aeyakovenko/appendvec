@@ -47,8 +47,9 @@ where
         assert!(self.current_offset > index);
         let index = (index as usize) * mem::size_of::<T>();
         let data = &self.map[index..(index + mem::size_of::<T>())];
-        let ptr = data.as_ptr() as *const _;
-        unsafe { ptr.as_ref().unwrap() }
+        let ptr = data.as_ptr() as *const T;
+        let x: Option<&T> = unsafe { ptr.as_ref() };
+        x.unwrap()
     }
 
     pub fn grow_file(&mut self) -> io::Result<()> {
@@ -83,6 +84,7 @@ where
 pub mod tests {
     use super::*;
     use rand::{thread_rng, Rng};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
     use timing::{duration_as_ms, duration_as_s};
 
@@ -130,5 +132,24 @@ pub mod tests {
             duration_as_ms(&now.elapsed()),
             (num_reads as f32) / duration_as_s(&now.elapsed()),
         );
+    }
+    #[test]
+    fn random_atomic_change() {
+        let mut vec = AppendVec::<AtomicUsize>::new("/tmp/appendvec/test_rax");
+        let size = 1_000;
+        for _ in 0..size {
+            if vec.append(AtomicUsize::new(0)).is_none() {
+                assert!(vec.grow_file().is_ok());
+                assert!(vec.append(AtomicUsize::new(0)).is_some());
+            }
+        }
+        let index = thread_rng().gen_range(0, size as u64);
+        let atomic1 = vec.get(index);
+        let current1 = atomic1.load(Ordering::Relaxed);
+        let next = current1 + 1;
+        atomic1.store(next, Ordering::Relaxed);
+        let atomic2 = vec.get(index);
+        let current2 = atomic2.load(Ordering::Relaxed);
+        assert_eq!(current2, next);
     }
 }
