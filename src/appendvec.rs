@@ -4,11 +4,14 @@ use std::io;
 use std::io::{Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 pub struct AppendVec<T> {
     data: File,
     map: MmapMut,
-    current_offset: u64,
+    current_len: AtomicUsize,
+    append_lock: Mutex<usize>,
     file_size: u64,
     _dummy: PhantomData<T>,
 }
@@ -37,14 +40,19 @@ where
         AppendVec {
             data,
             map,
-            current_offset: 0,
+            current_len: AtomicUsize::new(0),
+            append_lock: Mutex::new(0),
             file_size: DATA_FILE_START_SIZE,
             _dummy: Default::default(),
         }
     }
 
+    pub fn len(&self) -> u64 {
+        self.current_len.load(Ordering::Relaxed) as u64
+    }
+
     pub fn get(&self, index: u64) -> &T {
-        assert!(self.current_offset > index);
+        assert!(self.len() > index);
         let index = (index as usize) * mem::size_of::<T>();
         let data = &self.map[index..(index + mem::size_of::<T>())];
         let ptr = data.as_ptr() as *const T;
@@ -52,7 +60,15 @@ where
         x.unwrap()
     }
 
+    // grow the file
+    // must be exclusive to read and append and itself
     pub fn grow_file(&mut self) -> io::Result<()> {
+        let append_lock = self.append_lock.lock().unwrap();
+        let index = *append_lock * mem::size_of::<T>();
+        if index as u64 + DATA_FILE_INC_SIZE < self.file_size {
+            // grow was already called
+            return Ok(());
+        }
         let end = self.file_size + DATA_FILE_INC_SIZE;
         drop(&self.map);
         self.data.seek(SeekFrom::Start(end))?;
@@ -64,19 +80,24 @@ where
         Ok(())
     }
 
-    pub fn append(&mut self, val: T) -> Option<u64> {
-        let index = (self.current_offset as usize) * mem::size_of::<T>();
-
+    // append the data to the vector
+    // a single append can be concurrent with multiple reads
+    pub fn append(&self, val: T) -> Option<u64> {
+        let mut append_lock = self.append_lock.lock().unwrap();
+        let pos = self.len() as usize;
+        let index = pos * mem::size_of::<T>();
         if (self.file_size as usize) < index + mem::size_of::<T>() {
             return None;
         }
-
         //info!("appending to {}", index);
-        let data = &mut self.map[index..(index + mem::size_of::<T>())];
-        unsafe { std::ptr::write(data.as_mut_ptr() as *mut _, val) };
-        let ret = self.current_offset;
-        self.current_offset += 1;
-        Some(ret)
+        let data = &self.map[index..(index + mem::size_of::<T>())];
+        unsafe {
+            let ptr = std::mem::transmute::<*const u8, *mut T>(data.as_ptr());
+            std::ptr::write(ptr, val)
+        };
+        self.current_len.fetch_add(1, Ordering::Relaxed);
+        *append_lock = pos;
+        Some(pos as u64)
     }
 }
 
@@ -84,13 +105,12 @@ where
 pub mod tests {
     use super::*;
     use rand::{thread_rng, Rng};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
     use timing::{duration_as_ms, duration_as_s};
 
     #[test]
     fn test_append_vec() {
-        let mut av = AppendVec::new("/tmp/appendvec/test_append");
+        let av = AppendVec::new("/tmp/appendvec/test_append");
         let val: u64 = 5;
         let index = av.append(val).unwrap();
         assert_eq!(*av.get(index), val);
