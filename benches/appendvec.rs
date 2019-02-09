@@ -7,7 +7,9 @@ use appendvec::appendvec::AppendVec;
 use rand::{thread_rng, Rng};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
+use std::thread::sleep;
 use std::thread::spawn;
+use std::time::Duration;
 use test::Bencher;
 
 #[bench]
@@ -134,12 +136,12 @@ fn concurrent_get_append(bencher: &mut Bencher) {
             assert!(wlock.grow_file().is_ok());
         }
     });
+    while vec.read().unwrap().len() == 0 {
+        sleep(Duration::from_millis(900));
+    }
     bencher.iter(|| {
         let rlock = vec.read().unwrap();
-        let len = rlock.len();
-        if len > 0 {
-            let index = thread_rng().gen_range(0, rlock.len());
-            rlock.get(index);
-        }
+        let index = thread_rng().gen_range(0, rlock.len());
+        rlock.get(index);
     });
 }
