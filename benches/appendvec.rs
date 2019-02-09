@@ -80,7 +80,7 @@ fn concurrent_lock_append(bencher: &mut Bencher) {
         "/tmp/appendvec/bench_lock_append",
     )));
     let vec1 = vec.clone();
-    let size = 100_000_000;
+    let size = 1_000_000_000;
     spawn(move || loop {
         {
             let rlock = vec1.read().unwrap();
@@ -113,7 +113,7 @@ fn concurrent_get_append(bencher: &mut Bencher) {
         "/tmp/appendvec/bench_get_append",
     )));
     let vec1 = vec.clone();
-    let size = 100_000_000;
+    let size = 1_000_000_000;
     spawn(move || loop {
         {
             let rlock = vec1.read().unwrap();
@@ -136,7 +136,10 @@ fn concurrent_get_append(bencher: &mut Bencher) {
     });
     bencher.iter(|| {
         let rlock = vec.read().unwrap();
-        let index = thread_rng().gen_range(0, rlock.len());
-        rlock.get(index);
+        let len = rlock.len();
+        if len > 0 {
+            let index = thread_rng().gen_range(0, rlock.len());
+            rlock.get(index);
+        }
     });
 }
