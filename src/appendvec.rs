@@ -62,7 +62,7 @@ impl AppendVec {
     }
 
     fn get_slice(&self, offset: usize, size: usize) -> &mut [u8] {
-        let len = self.current_len.load(Ordering::Relaxed);
+        let len = self.len();
         assert!(len >= offset + size);
         let data = &self.map[offset..offset + size];
         unsafe {
@@ -108,7 +108,7 @@ impl AppendVec {
             end += val.1;
         }
 
-        if (self.file_size as usize) < end {
+        if (self.file_size as usize) <= end {
             return None;
         }
 
@@ -140,12 +140,13 @@ impl AppendVec {
     pub fn accounts(&self, mut start: usize) -> Vec<&Account> {
         let mut accounts = vec![];
         loop {
-            if start >= self.len() {
+            let end = align_up!(start + mem::size_of::<Account>(), mem::size_of::<u64>());
+            if end > self.len() {
                 break;
             }
             let first = self.get_account(start);
             accounts.push(first);
-            let data_at = align_up!(start + mem::size_of::<u64>(), mem::size_of::<u64>());
+            let data_at = align_up!(start + mem::size_of::<Account>(), mem::size_of::<u64>());
             let next = align_up!(data_at + first.data.len(), mem::size_of::<u64>());
             start = next;
         }
@@ -176,23 +177,23 @@ pub mod tests {
     use std::time::Instant;
     use timing::duration_as_ms;
 
-    // #[test]
-    // fn test_append_vec() {
-    //     let av = AppendVec::new("/tmp/appendvec/test_append");
-    //     let val = Account {
-    //         lamports: 5,
-    //         data: vec![],
-    //     };
-    //     let index = av.append_account(&val).unwrap();
-    //     assert_eq!(*av.get_account(index), val);
-    //     let val1 = Account {
-    //         lamports: 6,
-    //         data: vec![],
-    //     };
-    //     let index1 = av.append_account(&val1).unwrap();
-    //     assert_eq!(*av.get_account(index), val);
-    //     assert_eq!(*av.get_account(index1), val1);
-    // }
+    #[test]
+    fn test_append_vec() {
+        let av = AppendVec::new("/tmp/appendvec/test_append");
+        let val = Account {
+            lamports: 5,
+            data: vec![],
+        };
+        let index = av.append_account(&val).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        let val1 = Account {
+            lamports: 6,
+            data: vec![],
+        };
+        let index1 = av.append_account(&val1).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        assert_eq!(*av.get_account(index1), val1);
+    }
 
     #[test]
     fn test_append_vec_data() {
@@ -204,58 +205,62 @@ pub mod tests {
         let index = av.append_account(&val).unwrap();
         let account = av.get_account(index);
         assert_eq!(*account, val);
-        //let val1 = Account {
-        //    lamports: 6,
-        //    data: vec![4, 5, 6],
-        //};
-        //let index1 = av.append_account(&val1).unwrap();
-        //assert_eq!(*av.get_account(index), val);
-        //assert_eq!(*av.get_account(index1), val1);
+        let val1 = Account {
+            lamports: 6,
+            data: vec![4, 5, 6],
+        };
+        let index1 = av.append_account(&val1).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        assert_eq!(*av.get_account(index1), val1);
     }
-    //fn test_account(ix: usize) -> Account {
-    //    let data_len = ix % 256;
-    //    Account {
-    //        lamports: ix as u64,
-    //        data: (0..data_len).into_iter().map(|_| data_len as u8).collect(),
-    //    }
-    //}
-    //#[test]
-    //fn test_grow_append_vec() {
-    //    let mut av = AppendVec::new("/tmp/appendvec/test_grow");
-    //    //let mut val: u64 = 5;
+    fn test_account(ix: usize) -> Account {
+        let data_len = ix % 256;
+        Account {
+            lamports: ix as u64,
+            data: (0..data_len).into_iter().map(|_| data_len as u8).collect(),
+        }
+    }
+    #[test]
+    fn test_grow_append_vec() {
+        let mut av = AppendVec::new("/tmp/appendvec/test_grow");
 
-    //    let size = 100_000;
-    //    let mut indexes = vec![];
-    //    let now = Instant::now();
-    //    for ix in 0..size {
-    //        let val = test_account(ix);
-    //        if let Some(pos) = av.append_account(&val) {
-    //            indexes.push(pos)
-    //        } else {
-    //            assert!(av.grow_file(512).is_ok());
-    //            assert!(av.append_account(&val).is_some());
-    //        }
-    //    }
-    //    println!("append time: {} ms", duration_as_ms(&now.elapsed()),);
+        let size = 1_000_000;
+        let mut indexes = vec![];
+        let now = Instant::now();
+        for ix in 0..size {
+            let val = test_account(ix);
+            if let Some(pos) = av.append_account(&val) {
+                assert_eq!(*av.get_account(pos), val);
+                indexes.push(pos)
+            } else {
+                assert!(av.grow_file(512).is_ok());
+                let pos = av.append_account(&val).unwrap();
+                assert_eq!(*av.get_account(pos), val);
+                indexes.push(pos)
+            }
+        }
+        println!("append time: {} ms", duration_as_ms(&now.elapsed()),);
 
-    //    let now = Instant::now();
-    //    for _ in 0..size {
-    //        let ix = thread_rng().gen_range(0, indexes.len());
-    //        let val = test_account(ix);
-    //        assert_eq!(*av.get_account(indexes[ix]), val);
-    //    }
-    //    println!("random read time: {} ms", duration_as_ms(&now.elapsed()),);
+        let now = Instant::now();
+        for _ in 0..size {
+            let ix = thread_rng().gen_range(0, indexes.len());
+            let val = test_account(ix);
+            assert_eq!(*av.get_account(indexes[ix]), val);
+        }
+        println!("random read time: {} ms", duration_as_ms(&now.elapsed()),);
 
-    //    let now = Instant::now();
-    //    let accounts = av.accounts(indexes[0]);
-    //    assert_eq!(accounts.len(), size);
-    //    for (ix, v) in accounts.iter().enumerate() {
-    //        let val = test_account(ix);
-    //        assert_eq!(**v, val)
-    //    }
-    //    println!(
-    //        "sequential read time: {} ms",
-    //        duration_as_ms(&now.elapsed()),
-    //    );
-    //}
+        let now = Instant::now();
+        assert_eq!(indexes.len(), size);
+        assert_eq!(indexes[0], 0);
+        let accounts = av.accounts(indexes[0]);
+        assert_eq!(accounts.len(), size);
+        for (ix, v) in accounts.iter().enumerate() {
+            let val = test_account(ix);
+            assert_eq!(**v, val)
+        }
+        println!(
+            "sequential read time: {} ms",
+            duration_as_ms(&now.elapsed()),
+        );
+    }
 }
