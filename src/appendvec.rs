@@ -2,26 +2,32 @@ use memmap::MmapMut;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Seek, SeekFrom, Write};
-use std::marker::PhantomData;
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-pub struct AppendVec<T> {
+macro_rules! align_up {
+    ($addr: expr, $align: expr) => {
+        ($addr + ($align - 1)) & !($align - 1)
+    };
+}
+
+pub struct Account {
+    pub lamports: u64,
+    pub data: Vec<u8>,
+}
+
+pub struct AppendVec {
     data: File,
     map: MmapMut,
+    append_offset: Mutex<usize>,
     current_len: AtomicUsize,
-    append_lock: Mutex<usize>,
     file_size: u64,
-    _dummy: PhantomData<T>,
 }
 
 const DATA_FILE_INC_SIZE: u64 = 4 * 1024 * 1024;
 
-impl<T> AppendVec<T>
-where
-    T: Default,
-{
+impl AppendVec {
     pub fn new(file: &str) -> Self {
         const DATA_FILE_START_SIZE: u64 = 16 * 1024 * 1024;
         let mut data = OpenOptions::new()
@@ -40,32 +46,36 @@ where
         AppendVec {
             data,
             map,
+            append_offset: Mutex::new(0),
             current_len: AtomicUsize::new(0),
-            append_lock: Mutex::new(0),
             file_size: DATA_FILE_START_SIZE,
-            _dummy: Default::default(),
         }
     }
 
-    pub fn len(&self) -> u64 {
-        self.current_len.load(Ordering::Relaxed) as u64
+    pub fn len(&self) -> usize {
+        self.current_len.load(Ordering::Relaxed)
     }
 
-    pub fn get(&self, index: u64) -> &T {
-        assert!(self.len() > index);
-        let index = (index as usize) * mem::size_of::<T>();
-        let data = &self.map[index..(index + mem::size_of::<T>())];
-        let ptr = data.as_ptr() as *const T;
-        let x: Option<&T> = unsafe { ptr.as_ref() };
-        x.unwrap()
+    pub fn capacity(&self) -> u64 {
+        self.file_size
+    }
+
+    fn get_slice(&self, offset: usize, size: usize) -> &mut [u8] {
+        let len = self.current_len.load(Ordering::Relaxed);
+        assert!(len >= offset + size);
+        let data = &self.map[offset..offset + size];
+        unsafe {
+            let dst = std::mem::transmute::<*const u8, *mut u8>(data.as_ptr());
+            std::slice::from_raw_parts_mut(dst, size)
+        }
     }
 
     // grow the file
     // must be exclusive to read and append and itself
-    pub fn grow_file(&mut self) -> io::Result<()> {
-        let append_lock = self.append_lock.lock().unwrap();
-        let index = *append_lock * mem::size_of::<T>();
-        if index as u64 + DATA_FILE_INC_SIZE < self.file_size {
+    pub fn grow_file(&mut self, size: usize) -> io::Result<()> {
+        let append_offset = self.append_offset.lock().unwrap();
+        let offset = *append_offset + size;
+        if offset as u64 + DATA_FILE_INC_SIZE < self.file_size {
             // grow was already called
             return Ok(());
         }
@@ -80,24 +90,64 @@ where
         Ok(())
     }
 
-    // append the data to the vector
-    // a single append can be concurrent with multiple reads
-    pub fn append(&self, val: T) -> Option<u64> {
-        let mut append_lock = self.append_lock.lock().unwrap();
-        let pos = self.len() as usize;
-        let index = pos * mem::size_of::<T>();
-        if (self.file_size as usize) < index + mem::size_of::<T>() {
+    fn append_ptr(&self, offset: &mut usize, src: *const u8, len: usize) {
+        let pos = align_up!(*offset as usize, mem::size_of::<u64>());
+        let data = &self.map[pos..(pos + len)];
+        unsafe {
+            let dst = std::mem::transmute::<*const u8, *mut u8>(data.as_ptr());
+            std::ptr::copy(src, dst, len);
+        };
+        *offset = pos + len;
+    }
+    fn append_ptrs(&self, vals: &[(*const u8, usize)]) -> Option<usize> {
+        let mut offset = self.append_offset.lock().unwrap();
+        let mut end = *offset;
+        for val in vals {
+            end = align_up!(end, mem::size_of::<u64>());
+            end += val.1;
+        }
+
+        if (self.file_size as usize) < end {
             return None;
         }
-        //info!("appending to {}", index);
-        let data = &self.map[index..(index + mem::size_of::<T>())];
-        unsafe {
-            let ptr = std::mem::transmute::<*const u8, *mut T>(data.as_ptr());
-            std::ptr::write(ptr, val)
+
+        let pos = align_up!(*offset, mem::size_of::<u64>());
+        for val in vals {
+            self.append_ptr(&mut offset, val.0, val.1)
+        }
+        self.current_len.store(*offset, Ordering::Relaxed);
+        Some(pos)
+    }
+
+    pub fn get_account(&self, offset: usize) -> &Account {
+        let account: *mut Account = {
+            let data = self.get_slice(offset, mem::size_of::<Account>());
+            unsafe { std::mem::transmute::<*const u8, *mut Account>(data.as_ptr()) }
         };
-        self.current_len.fetch_add(1, Ordering::Relaxed);
-        *append_lock = pos;
-        Some(pos as u64)
+        let data_at = align_up!(offset + mem::size_of::<Account>(), mem::size_of::<u64>());
+        let account_ref: &mut Account =
+            unsafe { std::mem::transmute::<*mut Account, &mut Account>(account) };
+        let data = self.get_slice(data_at, account_ref.data.len());
+        unsafe {
+            account_ref.data = Vec::from_raw_parts(data.as_mut_ptr(), data.len(), data.len());
+        };
+        account_ref
+    }
+
+    pub fn append_account(&self, account: &Account) -> Option<usize> {
+        unsafe {
+            let acc_ptr = account as *const Account;
+            let data_len = account.data.len();
+            let data_ptr = account.data.as_ptr();
+            let ptrs = [
+                (
+                    std::mem::transmute::<*const Account, *const u8>(acc_ptr),
+                    mem::size_of::<Account>(),
+                ),
+                (data_ptr, data_len),
+            ];
+            self.append_ptrs(&ptrs)
+        }
     }
 }
 

@@ -103,6 +103,9 @@ fn concurrent_lock_append(bencher: &mut Bencher) {
             assert!(wlock.grow_file().is_ok());
         }
     });
+    while vec.read().unwrap().len() == 0 {
+        sleep(Duration::from_millis(100));
+    }
     bencher.iter(|| {
         let rlock = vec.read().unwrap();
         assert!(rlock.len() < size * 2);
@@ -137,7 +140,7 @@ fn concurrent_get_append(bencher: &mut Bencher) {
         }
     });
     while vec.read().unwrap().len() == 0 {
-        sleep(Duration::from_millis(900));
+        sleep(Duration::from_millis(100));
     }
     bencher.iter(|| {
         let rlock = vec.read().unwrap();
