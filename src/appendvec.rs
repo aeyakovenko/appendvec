@@ -12,6 +12,7 @@ macro_rules! align_up {
     };
 }
 
+#[derive(PartialEq, Default, Debug)]
 pub struct Account {
     pub lamports: u64,
     pub data: Vec<u8>,
@@ -134,6 +135,21 @@ impl AppendVec {
         account_ref
     }
 
+    pub fn accounts(&self, mut start: usize) -> Vec<&Account> {
+        let mut accounts = vec![];
+        loop {
+            if start >= self.len() {
+                break;
+            }
+            let first = self.get_account(start);
+            accounts.push(first);
+            let data_at = align_up!(start + mem::size_of::<u64>(), mem::size_of::<u64>());
+            let next = align_up!(data_at + first.data.len(), mem::size_of::<u64>());
+            start = next;
+        }
+        accounts
+    }
+
     pub fn append_account(&self, account: &Account) -> Option<usize> {
         unsafe {
             let acc_ptr = account as *const Account;
@@ -156,70 +172,81 @@ pub mod tests {
     use super::*;
     use rand::{thread_rng, Rng};
     use std::time::Instant;
-    use timing::{duration_as_ms, duration_as_s};
+    use timing::duration_as_ms;
 
     #[test]
     fn test_append_vec() {
         let av = AppendVec::new("/tmp/appendvec/test_append");
-        let val: u64 = 5;
-        let index = av.append(val).unwrap();
-        assert_eq!(*av.get(index), val);
-        let val1 = val + 1;
-        let index1 = av.append(val1).unwrap();
-        assert_eq!(*av.get(index), val);
-        assert_eq!(*av.get(index1), val1);
+        let val = Account {
+            lamports: 5,
+            data: vec![],
+        };
+        let index = av.append_account(&val).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        let val1 = Account {
+            lamports: 6,
+            data: vec![],
+        };
+        let index1 = av.append_account(&val1).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        assert_eq!(*av.get_account(index1), val1);
+    }
+
+    #[test]
+    fn test_append_vec_data() {
+        let av = AppendVec::new("/tmp/appendvec/test_append2");
+        let val = Account {
+            lamports: 5,
+            data: vec![1, 2, 3],
+        };
+        let index = av.append_account(&val).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        let val1 = Account {
+            lamports: 6,
+            data: vec![4, 5, 6],
+        };
+        let index1 = av.append_account(&val1).unwrap();
+        assert_eq!(*av.get_account(index), val);
+        assert_eq!(*av.get_account(index1), val1);
     }
 
     #[test]
     fn test_grow_append_vec() {
         let mut av = AppendVec::new("/tmp/appendvec/test_grow");
         //let mut val: u64 = 5;
-        let mut val = [5u64; 32];
+        let val = Account {
+            lamports: 5,
+            data: vec![1, 2, 3],
+        };
         let size = 100_000;
+        let mut indexes = vec![];
+        let now = Instant::now();
+        for _ in 0..size {
+            if let Some(pos) = av.append_account(&val) {
+                indexes.push(pos)
+            } else {
+                assert!(av.grow_file(512).is_ok());
+                assert!(av.append_account(&val).is_some());
+            }
+        }
+        println!("append time: {} ms", duration_as_ms(&now.elapsed()),);
 
         let now = Instant::now();
         for _ in 0..size {
-            if av.append(val).is_none() {
-                assert!(av.grow_file().is_ok());
-                assert!(av.append(val).is_some());
-            }
-            val[0] += 1;
+            let ix = thread_rng().gen_range(0, indexes.len());
+            assert_eq!(*av.get_account(indexes[ix]), val);
         }
-        println!(
-            "time: {} ms {} / s",
-            duration_as_ms(&now.elapsed()),
-            ((mem::size_of::<[u64; 32]>() * size) as f32) / duration_as_s(&now.elapsed()),
-        );
+        println!("random read time: {} ms", duration_as_ms(&now.elapsed()),);
 
         let now = Instant::now();
-        let num_reads = 100_000;
-        for _ in 0..num_reads {
-            let index = thread_rng().gen_range(0, size as u64);
-            assert_eq!(av.get(index)[0], index + 5);
+        let accounts = av.accounts(indexes[0]);
+        assert_eq!(accounts.len(), size);
+        for v in &accounts {
+            assert_eq!(**v, val)
         }
         println!(
-            "time: {} ms {} / s",
+            "sequential read time: {} ms",
             duration_as_ms(&now.elapsed()),
-            (num_reads as f32) / duration_as_s(&now.elapsed()),
         );
-    }
-    #[test]
-    fn random_atomic_change() {
-        let mut vec = AppendVec::<AtomicUsize>::new("/tmp/appendvec/test_rax");
-        let size = 1_000;
-        for _ in 0..size {
-            if vec.append(AtomicUsize::new(0)).is_none() {
-                assert!(vec.grow_file().is_ok());
-                assert!(vec.append(AtomicUsize::new(0)).is_some());
-            }
-        }
-        let index = thread_rng().gen_range(0, size as u64);
-        let atomic1 = vec.get(index);
-        let current1 = atomic1.load(Ordering::Relaxed);
-        let next = current1 + 1;
-        atomic1.store(next, Ordering::Relaxed);
-        let atomic2 = vec.get(index);
-        let current2 = atomic2.load(Ordering::Relaxed);
-        assert_eq!(current2, next);
     }
 }
