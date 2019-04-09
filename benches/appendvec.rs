@@ -21,7 +21,7 @@ fn test_account(ix: usize) -> Account {
 
 #[bench]
 fn append(bencher: &mut Bencher) {
-    let vec = AppendVec::new("/tmp/appendvec/bench_append", 2*1024 * 1024 * 1024);
+    let vec = AppendVec::new("/tmp/appendvec/bench_append", 2 * 1024 * 1024 * 1024);
     bencher.iter(|| {
         let val = test_account(0);
         assert!(vec.append_account(&val).is_some());
@@ -60,7 +60,7 @@ fn random_read(bencher: &mut Bencher) {
         let random_index: usize = thread_rng().gen_range(0, indexes.len());
         let ix = &indexes[random_index];
         let account = vec.get_account(*ix);
-        let test = test_account(*ix);
+        let test = test_account(random_index);
         assert_eq!(*account, test);
     });
 }
@@ -69,7 +69,7 @@ fn random_read(bencher: &mut Bencher) {
 fn concurrent_lock_append_read(bencher: &mut Bencher) {
     let vec = Arc::new(AppendVec::new(
         "/tmp/appendvec/bench_lock_append_read",
-        1024 * 1024 * 1024,
+        1024 * 1024,
     ));
     let vec1 = vec.clone();
     spawn(move || loop {
