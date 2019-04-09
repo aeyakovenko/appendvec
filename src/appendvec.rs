@@ -1,6 +1,5 @@
 use memmap::MmapMut;
-use std::fs::{File, OpenOptions};
-use std::io;
+use std::fs::{OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,7 +18,6 @@ pub struct Account {
 }
 
 pub struct AppendVec {
-    data: File,
     map: MmapMut,
     append_offset: Mutex<usize>,
     current_len: AtomicUsize,
@@ -43,7 +41,6 @@ impl AppendVec {
         let map = unsafe { MmapMut::map_mut(&data).expect("failed to map the data file") };
 
         AppendVec {
-            data,
             map,
             append_offset: Mutex::new(0),
             current_len: AtomicUsize::new(0),
@@ -200,7 +197,7 @@ pub mod tests {
     }
     #[test]
     fn test_grow_append_vec() {
-        let mut av = AppendVec::new("/tmp/appendvec/test_grow");
+        let av = AppendVec::new("/tmp/appendvec/test_grow");
 
         let size = 1000;
         let mut indexes = vec![];
