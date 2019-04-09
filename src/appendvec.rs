@@ -26,11 +26,9 @@ pub struct AppendVec {
     file_size: u64,
 }
 
-const DATA_FILE_INC_SIZE: u64 = 4 * 1024 * 1024;
-
 impl AppendVec {
     pub fn new(file: &str) -> Self {
-        const DATA_FILE_START_SIZE: u64 = 16 * 1024 * 1024;
+        const DATA_FILE_START_SIZE: u64 = 64 * 1024 * 1024;
         let mut data = OpenOptions::new()
             .read(true)
             .write(true)
@@ -69,26 +67,6 @@ impl AppendVec {
             let dst = std::mem::transmute::<*const u8, *mut u8>(data.as_ptr());
             std::slice::from_raw_parts_mut(dst, size)
         }
-    }
-
-    // grow the file
-    // must be exclusive to read and append and itself
-    pub fn grow_file(&mut self, size: usize) -> io::Result<()> {
-        let append_offset = self.append_offset.lock().unwrap();
-        let offset = *append_offset + size;
-        if offset as u64 + DATA_FILE_INC_SIZE < self.file_size {
-            // grow was already called
-            return Ok(());
-        }
-        let end = self.file_size + DATA_FILE_INC_SIZE;
-        drop(&self.map);
-        self.data.seek(SeekFrom::Start(end))?;
-        self.data.write_all(&[0])?;
-        self.data.seek(SeekFrom::Start(0))?;
-        self.data.flush()?;
-        self.map = unsafe { MmapMut::map_mut(&self.data)? };
-        self.file_size = end;
-        Ok(())
     }
 
     fn append_ptr(&self, offset: &mut usize, src: *const u8, len: usize) {
@@ -224,20 +202,14 @@ pub mod tests {
     fn test_grow_append_vec() {
         let mut av = AppendVec::new("/tmp/appendvec/test_grow");
 
-        let size = 1_000_000;
+        let size = 1000;
         let mut indexes = vec![];
         let now = Instant::now();
         for ix in 0..size {
             let val = test_account(ix);
-            if let Some(pos) = av.append_account(&val) {
-                assert_eq!(*av.get_account(pos), val);
-                indexes.push(pos)
-            } else {
-                assert!(av.grow_file(512).is_ok());
-                let pos = av.append_account(&val).unwrap();
-                assert_eq!(*av.get_account(pos), val);
-                indexes.push(pos)
-            }
+            let pos = av.append_account(&val).unwrap();
+            assert_eq!(*av.get_account(pos), val);
+            indexes.push(pos)
         }
         println!("append time: {} ms", duration_as_ms(&now.elapsed()),);
 
