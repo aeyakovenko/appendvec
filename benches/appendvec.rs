@@ -21,7 +21,7 @@ fn test_account(ix: usize) -> Account {
 
 #[bench]
 fn append(bencher: &mut Bencher) {
-    let vec = AppendVec::new("/tmp/appendvec/bench_append", 1024 * 1024 * 1024);
+    let vec = AppendVec::new("/tmp/appendvec/bench_append", 2*1024 * 1024 * 1024);
     bencher.iter(|| {
         let val = test_account(0);
         assert!(vec.append_account(&val).is_some());
@@ -35,15 +35,15 @@ fn sequential_read(bencher: &mut Bencher) {
     let mut indexes = vec![];
     for ix in 0..size {
         let val = test_account(ix);
-        let ix = vec.append_account(&val).unwrap();
-        indexes.push(ix)
+        let pos = vec.append_account(&val).unwrap();
+        indexes.push((ix, pos))
     }
     bencher.iter(|| {
-        let ix = indexes.pop().unwrap();
-        let account = vec.get_account(ix);
+        let (ix, pos) = indexes.pop().unwrap();
+        let account = vec.get_account(pos);
         let test = test_account(ix);
         assert_eq!(*account, test);
-        indexes.push(ix);
+        indexes.push((ix, pos));
     });
 }
 #[bench]
@@ -71,7 +71,6 @@ fn concurrent_lock_append_read(bencher: &mut Bencher) {
         "/tmp/appendvec/bench_lock_append_read",
         1024 * 1024 * 1024,
     ));
-    let size = 1_000_000;
     let vec1 = vec.clone();
     spawn(move || loop {
         let account = test_account(0);
