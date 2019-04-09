@@ -5,7 +5,7 @@ extern crate test;
 
 use appendvec::appendvec::{Account, AppendVec};
 use rand::{thread_rng, Rng};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::thread::spawn;
 use std::time::Duration;
@@ -21,7 +21,7 @@ fn test_account(ix: usize) -> Account {
 
 #[bench]
 fn append(bencher: &mut Bencher) {
-    let vec = AppendVec::new("/tmp/appendvec/bench_append");
+    let vec = AppendVec::new("/tmp/appendvec/bench_append", 1024 * 1024 * 1024);
     bencher.iter(|| {
         let val = test_account(0);
         assert!(vec.append_account(&val).is_some());
@@ -30,7 +30,7 @@ fn append(bencher: &mut Bencher) {
 
 #[bench]
 fn sequential_read(bencher: &mut Bencher) {
-    let vec = AppendVec::new("/tmp/appendvec/bench_ra");
+    let vec = AppendVec::new("/tmp/appendvec/bench_ra", 128 * 1024 * 1024);
     let size = 1_000;
     let mut indexes = vec![];
     for ix in 0..size {
@@ -48,7 +48,7 @@ fn sequential_read(bencher: &mut Bencher) {
 }
 #[bench]
 fn random_read(bencher: &mut Bencher) {
-    let vec = AppendVec::new("/tmp/appendvec/bench_rax");
+    let vec = AppendVec::new("/tmp/appendvec/bench_rax", 128 * 1024 * 1024);
     let size = 1_000;
     let mut indexes = vec![];
     for ix in 0..size {
@@ -67,31 +67,23 @@ fn random_read(bencher: &mut Bencher) {
 
 #[bench]
 fn concurrent_lock_append_read(bencher: &mut Bencher) {
-    let vec = Arc::new(RwLock::new(AppendVec::new(
+    let vec = Arc::new(AppendVec::new(
         "/tmp/appendvec/bench_lock_append_read",
-    )));
+        1024 * 1024 * 1024,
+    ));
+    let size = 1_000_000;
     let vec1 = vec.clone();
-    let size = 1_000;
     spawn(move || loop {
-        {
-            let rlock = vec1.read().unwrap();
-            loop {
-                let account = test_account(0);
-                if rlock.append_account(&account).is_none() {
-                    break;
-                }
-            }
-            if rlock.len() >= size {
-                break;
-            }
+        let account = test_account(0);
+        if vec1.append_account(&account).is_none() {
+            break;
         }
     });
-    while vec.read().unwrap().len() == 0 {
+    while vec.len() == 0 {
         sleep(Duration::from_millis(100));
     }
     bencher.iter(|| {
-        let rlock = vec.read().unwrap();
-        for acc in rlock.accounts(0) {
+        for acc in vec.accounts(0) {
             assert_eq!(acc.data.len(), 0);
         }
     });

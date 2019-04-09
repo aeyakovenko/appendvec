@@ -1,5 +1,5 @@
 use memmap::MmapMut;
-use std::fs::{OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,8 +25,7 @@ pub struct AppendVec {
 }
 
 impl AppendVec {
-    pub fn new(file: &str) -> Self {
-        const DATA_FILE_START_SIZE: u64 = 64 * 1024 * 1024;
+    pub fn new(file: &str, size: usize) -> Self {
         let mut data = OpenOptions::new()
             .read(true)
             .write(true)
@@ -34,7 +33,7 @@ impl AppendVec {
             .open(file)
             .expect("Unable to open data file");
 
-        data.seek(SeekFrom::Start(DATA_FILE_START_SIZE)).unwrap();
+        data.seek(SeekFrom::Start(size as u64)).unwrap();
         data.write_all(&[0]).unwrap();
         data.seek(SeekFrom::Start(0)).unwrap();
         data.flush().unwrap();
@@ -44,7 +43,7 @@ impl AppendVec {
             map,
             append_offset: Mutex::new(0),
             current_len: AtomicUsize::new(0),
-            file_size: DATA_FILE_START_SIZE,
+            file_size: size as u64,
         }
     }
 
@@ -154,7 +153,7 @@ pub mod tests {
 
     #[test]
     fn test_append_vec() {
-        let av = AppendVec::new("/tmp/appendvec/test_append");
+        let av = AppendVec::new("/tmp/appendvec/test_append", 1024 * 1024);
         let val = Account {
             lamports: 5,
             data: vec![],
@@ -172,7 +171,7 @@ pub mod tests {
 
     #[test]
     fn test_append_vec_data() {
-        let av = AppendVec::new("/tmp/appendvec/test_append2");
+        let av = AppendVec::new("/tmp/appendvec/test_append2", 1024 * 1024);
         let val = Account {
             lamports: 5,
             data: vec![1, 2, 3],
@@ -197,7 +196,7 @@ pub mod tests {
     }
     #[test]
     fn test_grow_append_vec() {
-        let av = AppendVec::new("/tmp/appendvec/test_grow");
+        let av = AppendVec::new("/tmp/appendvec/test_grow", 1024 * 1024);
 
         let size = 1000;
         let mut indexes = vec![];
